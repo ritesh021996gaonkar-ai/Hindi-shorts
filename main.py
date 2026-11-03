@@ -84,6 +84,14 @@ def make_one(i, history, args, work_root):
         voices.append(vp)
         durs.append(d)
 
+    # keep the short under ~58s: if the voice is too long, re-record a bit faster
+    total = sum(durs)
+    if not args.mock and total > 58:
+        base = int(config.VOICE_RATE.strip("%+") or 0)
+        rate = min(base + round((total / 56 - 1) * 100) + 2, 45)
+        print(f"    voice {total:.0f}s too long, re-recording at +{rate}%")
+        durs = [media.tts(sc["narration"], vp, rate=f"+{rate}%") for sc, vp in zip(scenes, voices)]
+
     clips, kinds = [], []
     for k, (sc, d) in enumerate(zip(scenes, durs)):
         if args.mock:

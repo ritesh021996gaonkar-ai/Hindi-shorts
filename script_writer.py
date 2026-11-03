@@ -47,8 +47,8 @@ Format of every short (fast, curious, 3D-animated explainer style):
 - End with a short punchline or open question (no "like and subscribe").
 - Simple spoken Hindi in Devanagari script. Common English words (like "oxygen",
   "brain") may stay in English but written in Devanagari.
-- Total narration: 135-160 words (about 55-60 seconds when spoken).
-- 10 to 12 scenes. Each scene = 1 short sentence of narration (8-16 words).
+- Total narration: 110-125 words MAXIMUM (must fit in 55 seconds when spoken).
+- 9 to 11 scenes. Each scene = 1 short sentence of narration (8-13 words).
 - Facts must be accurate. No medical advice, no gore, nothing graphic or scary
   for children, no real people, no brands, no copyrighted characters.
 

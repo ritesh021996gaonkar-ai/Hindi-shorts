@@ -29,9 +29,9 @@ def duration(path):
 
 
 # ---------------- Voice ----------------
-def tts(text, out_path):
+def tts(text, out_path, rate=None):
     async def _go():
-        await edge_tts.Communicate(text, config.VOICE, rate=config.VOICE_RATE).save(str(out_path))
+        await edge_tts.Communicate(text, config.VOICE, rate=rate or config.VOICE_RATE).save(str(out_path))
     for attempt in range(3):
         try:
             asyncio.run(_go())
@@ -76,19 +76,23 @@ def ai_video(prompt, out_path):
 
 def ai_image(prompt, out_path, seed):
     """Free AI image (Pollinations). Returns True on success."""
-    url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt)
+    url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt[:900])
            + f"?width=1080&height=1920&nologo=true&seed={seed}")
-    for attempt in range(3):
+    for attempt in range(5):
         try:
-            r = requests.get(url, timeout=180)
-            if r.ok and r.headers.get("content-type", "").startswith("image"):
+            r = requests.get(url, timeout=240)
+            if r.ok and r.headers.get("content-type", "").startswith("image") and len(r.content) > 20000:
                 out_path.write_bytes(r.content)
-                time.sleep(4)          # be polite to the free service
+                time.sleep(10)          # free service allows ~1 image per few seconds
                 return True
-        except requests.RequestException:
-            pass
-        time.sleep(15)
+            print(f"  image try {attempt + 1}: HTTP {r.status_code}")
+        except requests.RequestException as e:
+            print(f"  image try {attempt + 1}: {type(e).__name__}")
+        time.sleep(20 * (attempt + 1))
     return False
+
+
+LAST_IMAGE = None   # reused (with a new camera move) if an image fails
 
 
 VF_FIT = (f"scale={config.W}:{config.H}:force_original_aspect_ratio=increase,"
@@ -106,29 +110,39 @@ def scene_clip(visual_prompt, dur, use_ai_video, work, idx):
              "-vf", VF_FIT, *ENC, str(out)])
         return out, "ai-video"
 
+    global LAST_IMAGE
     if ai_image(visual_prompt, raw_img, seed=random.randint(1, 10**6)):
-        frames = int(dur * config.FPS) + 1
-        # rotate between 4 camera moves so scenes feel animated, not like a slideshow
-        moves = [
-            ("min(1+0.0012*on,1.3)", "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"),      # push in
-            ("max(1.3-0.0012*on,1)", "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"),      # pull out
-            ("1.2", f"(iw-iw/zoom)*on/{frames}", "ih/2-(ih/zoom/2)"),              # pan right
-            ("1.2", "iw/2-(iw/zoom/2)", f"(ih-ih/zoom)*(1-on/{frames})"),  # tilt up
-        ]
-        z, x, y = moves[idx % len(moves)]
-        vf = (f"scale={config.W * 2}:{config.H * 2}:force_original_aspect_ratio=increase,"
-              f"crop={config.W * 2}:{config.H * 2},"
-              f"zoompan=z='{z}':d={frames}:x='{x}':y='{y}'"
-              f":s={config.W}x{config.H}:fps={config.FPS},setsar=1,format=yuv420p")
-        run(["ffmpeg", "-y", "-i", str(raw_img), "-vf", vf, "-frames:v", str(frames),
-             "-t", f"{dur:.3f}", *ENC, str(out)])
+        LAST_IMAGE = raw_img
+        kenburns(raw_img, dur, idx, out)
         return out, "ai-image"
+
+    if LAST_IMAGE is not None:      # reuse the previous scene's picture, new camera move
+        kenburns(LAST_IMAGE, dur, idx + 1, out)
+        return out, "reused-image"
 
     # last resort so the run never dies: animated gradient background
     run(["ffmpeg", "-y", "-f", "lavfi", "-i",
          f"gradients=s={config.W}x{config.H}:speed=0.02:r={config.FPS}:d={dur:.3f}",
          "-vf", "format=yuv420p", *ENC, str(out)])
     return out, "fallback"
+
+
+def kenburns(img, dur, idx, out):
+    frames = int(dur * config.FPS) + 1
+    # rotate between 4 camera moves so scenes feel animated, not like a slideshow
+    moves = [
+        ("min(1+0.0012*on,1.3)", "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"),      # push in
+        ("max(1.3-0.0012*on,1)", "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"),      # pull out
+        ("1.2", f"(iw-iw/zoom)*on/{frames}", "ih/2-(ih/zoom/2)"),              # pan right
+        ("1.2", "iw/2-(iw/zoom/2)", f"(ih-ih/zoom)*(1-on/{frames})"),          # tilt up
+    ]
+    z, x, y = moves[idx % len(moves)]
+    vf = (f"scale={config.W * 2}:{config.H * 2}:force_original_aspect_ratio=increase,"
+          f"crop={config.W * 2}:{config.H * 2},"
+          f"zoompan=z='{z}':d={frames}:x='{x}':y='{y}'"
+          f":s={config.W}x{config.H}:fps={config.FPS},setsar=1,format=yuv420p")
+    run(["ffmpeg", "-y", "-i", str(img), "-vf", vf, "-frames:v", str(frames),
+         "-t", f"{dur:.3f}", *ENC, str(out)])
 
 
 # ---------------- Subtitles ----------------
