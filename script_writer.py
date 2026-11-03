@@ -1,10 +1,42 @@
 """Writes an original Hindi script (with scene-by-scene visual prompts) using Gemini."""
 import json
 import re
+import time
 
 import requests
 
 import config
+
+
+_MODEL = ""
+API = "https://generativelanguage.googleapis.com/v1beta"
+
+
+def _headers():
+    # header works for both old (AIza...) and new (AQ...) key formats
+    return {"x-goog-api-key": config.GEMINI_API_KEY.strip()}
+
+
+def _version(name):
+    nums = re.findall(r"\d+(?:\.\d+)?", name)
+    return float(nums[0]) if nums else 0.0
+
+
+def pick_model(exclude=""):
+    """Ask Google which models this key can use; pick the newest stable Flash."""
+    r = requests.get(f"{API}/models", headers=_headers(),
+                     params={"pageSize": 200}, timeout=60)
+    r.raise_for_status()
+    names = [m["name"].split("/")[-1] for m in r.json().get("models", [])
+             if "generateContent" in m.get("supportedGenerationMethods", [])]
+    flash = [n for n in names if "flash" in n and n != exclude
+             and not any(x in n for x in ("image", "tts", "audio", "live", "lite", "exp", "preview"))]
+    pool = flash or [n for n in names if "flash" in n and n != exclude] or names
+    if not pool:
+        raise RuntimeError("no Gemini model available for this API key")
+    print(f"  available flash models: {', '.join(sorted(flash)[:8])}")
+    return max(pool, key=lambda n: (_version(n), "latest" not in n, -len(n)))
+
 
 STYLE = """
 You write ORIGINAL YouTube Shorts scripts in HINDI for the channel "{channel}".
@@ -49,26 +81,35 @@ def write_script(avoid_topics):
         character=CHARACTER,
         avoid="; ".join(avoid_topics[-150:]) or "none",
     )
-    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-           f"{config.GEMINI_MODEL}:generateContent")
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 1.0,
                              "responseMimeType": "application/json"},
     }
-    for attempt in range(3):
-        # header works for both old (AIza...) and new (AQ...) key formats
-        r = requests.post(url, headers={"x-goog-api-key": config.GEMINI_API_KEY.strip()},
-                          json=body, timeout=120)
+    global _MODEL
+    model = _MODEL or config.GEMINI_MODEL
+    for attempt in range(4):
+        r = requests.post(f"{API}/models/{model}:generateContent",
+                          headers=_headers(), json=body, timeout=180)
+        if r.status_code == 404:          # model retired -> find a current one
+            print(f"  model {model} not available: {r.text[:200]}")
+            model = pick_model(exclude=model)
+            print(f"  switching to {model}")
+            continue
+        if r.status_code == 429:          # free-tier rate limit -> wait and retry
+            print("  rate limited, waiting 60s")
+            time.sleep(60)
+            continue
         if r.status_code >= 400:
             print(f"  Gemini error {r.status_code}: {r.text[:400]}")
         r.raise_for_status()
-        text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
         try:
+            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
             data = json.loads(re.sub(r"^```(json)?|```$", "", text.strip()))
             if 6 <= len(data["scenes"]) <= 16:
+                _MODEL = model          # remember the working model for the next videos
                 return data
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, KeyError, IndexError):
             pass
         print(f"  script attempt {attempt + 1} was malformed, retrying")
     raise RuntimeError("Gemini did not return a valid script")
