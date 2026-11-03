@@ -57,8 +57,11 @@ def write_script(avoid_topics):
                              "responseMimeType": "application/json"},
     }
     for attempt in range(3):
-        r = requests.post(url, params={"key": config.GEMINI_API_KEY},
+        # header works for both old (AIza...) and new (AQ...) key formats
+        r = requests.post(url, headers={"x-goog-api-key": config.GEMINI_API_KEY.strip()},
                           json=body, timeout=120)
+        if r.status_code >= 400:
+            print(f"  Gemini error {r.status_code}: {r.text[:400]}")
         r.raise_for_status()
         text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
         try:
