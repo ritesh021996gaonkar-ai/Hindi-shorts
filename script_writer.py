@@ -22,16 +22,17 @@ def _version(name):
     return float(nums[0]) if nums else 0.0
 
 
-def pick_model(exclude=""):
+def pick_model(exclude=()):
     """Ask Google which models this key can use; pick the newest stable Flash."""
     r = requests.get(f"{API}/models", headers=_headers(),
                      params={"pageSize": 200}, timeout=60)
     r.raise_for_status()
     names = [m["name"].split("/")[-1] for m in r.json().get("models", [])
              if "generateContent" in m.get("supportedGenerationMethods", [])]
-    flash = [n for n in names if "flash" in n and n != exclude
+    flash = [n for n in names if "flash" in n and n not in exclude
              and not any(x in n for x in ("image", "tts", "audio", "live", "lite", "exp", "preview"))]
-    pool = flash or [n for n in names if "flash" in n and n != exclude] or names
+    pool = flash or [n for n in names if "flash" in n and n not in exclude] or \
+        [n for n in names if n not in exclude]
     if not pool:
         raise RuntimeError("no Gemini model available for this API key")
     print(f"  available flash models: {', '.join(sorted(flash)[:8])}")
@@ -88,12 +89,21 @@ def write_script(avoid_topics):
     }
     global _MODEL
     model = _MODEL or config.GEMINI_MODEL
-    for attempt in range(4):
-        r = requests.post(f"{API}/models/{model}:generateContent",
-                          headers=_headers(), json=body, timeout=180)
-        if r.status_code == 404:          # model retired -> find a current one
+    tried = []
+    for attempt in range(6):
+        try:
+            r = requests.post(f"{API}/models/{model}:generateContent",
+                              headers=_headers(), json=body, timeout=300)
+        except requests.exceptions.RequestException as e:   # too slow / network
+            print(f"  {model} timed out or failed ({type(e).__name__}), trying another model")
+            tried.append(model)
+            model = pick_model(exclude=tried)
+            print(f"  switching to {model}")
+            continue
+        if r.status_code in (404, 400) and "model" in r.text.lower():   # retired model
             print(f"  model {model} not available: {r.text[:200]}")
-            model = pick_model(exclude=model)
+            tried.append(model)
+            model = pick_model(exclude=tried)
             print(f"  switching to {model}")
             continue
         if r.status_code == 429:          # free-tier rate limit -> wait and retry
