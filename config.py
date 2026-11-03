@@ -25,7 +25,7 @@ NICHE = env(
 )
 
 # ---------- Script writer (Gemini) ----------
-GEMINI_MODEL = env("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = env("GEMINI_MODEL", "gemini-flash-latest")  # auto-switches if unavailable
 
 # ---------- AI video clips (Replicate) ----------
 # Any Replicate text-to-video model works. Check replicate.com/collections/text-to-video

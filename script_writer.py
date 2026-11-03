@@ -22,22 +22,19 @@ def _version(name):
     return float(nums[0]) if nums else 0.0
 
 
-def pick_model(exclude=()):
-    """Ask Google which models this key can use; pick the newest stable Flash."""
+def candidate_models():
+    """Ask Google which models this key can use; newest stable Flash first."""
     r = requests.get(f"{API}/models", headers=_headers(),
                      params={"pageSize": 200}, timeout=60)
     r.raise_for_status()
     names = [m["name"].split("/")[-1] for m in r.json().get("models", [])
              if "generateContent" in m.get("supportedGenerationMethods", [])]
-    flash = [n for n in names if "flash" in n and n not in exclude
-             and not any(x in n for x in ("image", "tts", "audio", "live", "lite", "exp", "preview"))]
-    pool = flash or [n for n in names if "flash" in n and n not in exclude] or \
-        [n for n in names if n not in exclude]
-    if not pool:
-        raise RuntimeError("no Gemini model available for this API key")
-    print(f"  available flash models: {', '.join(sorted(flash)[:8])}")
-    return max(pool, key=lambda n: (_version(n), "latest" not in n, -len(n)))
-
+    bad = ("image", "tts", "audio", "live", "lite", "exp", "preview", "omni")
+    flash = [n for n in names if "flash" in n and not any(x in n for x in bad)]
+    flash.sort(key=lambda n: (_version(n), "latest" not in n, -len(n)), reverse=True)
+    others = [n for n in names if n not in flash and "flash" in n]
+    print(f"  available models: {', '.join(flash[:8])}")
+    return flash + others
 
 STYLE = """
 You write ORIGINAL YouTube Shorts scripts in HINDI for the channel "{channel}".
@@ -88,38 +85,43 @@ def write_script(avoid_topics):
                              "responseMimeType": "application/json"},
     }
     global _MODEL
-    model = _MODEL or config.GEMINI_MODEL
-    tried = []
-    for attempt in range(6):
+    queue = [_MODEL or config.GEMINI_MODEL]
+    listed = False
+    attempt = 0
+    while queue and attempt < 14:
+        model = queue[0]
+        attempt += 1
         try:
             r = requests.post(f"{API}/models/{model}:generateContent",
                               headers=_headers(), json=body, timeout=300)
-        except requests.exceptions.RequestException as e:   # too slow / network
-            print(f"  {model} timed out or failed ({type(e).__name__}), trying another model")
-            tried.append(model)
-            model = pick_model(exclude=tried)
-            print(f"  switching to {model}")
+            code, text_body = r.status_code, r.text
+        except requests.exceptions.RequestException as e:
+            code, text_body = 0, type(e).__name__
+
+        if code == 200:
+            try:
+                text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                data = json.loads(re.sub(r"^```(json)?|```$", "", text.strip()))
+                if 6 <= len(data["scenes"]) <= 16:
+                    _MODEL = model          # remember the working model
+                    print(f"  script written with {model}")
+                    return data
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                pass
+            print(f"  {model}: script was malformed, retrying")
             continue
-        if r.status_code in (404, 400) and "model" in r.text.lower():   # retired model
-            print(f"  model {model} not available: {r.text[:200]}")
-            tried.append(model)
-            model = pick_model(exclude=tried)
-            print(f"  switching to {model}")
-            continue
-        if r.status_code == 429:          # free-tier rate limit -> wait and retry
-            print("  rate limited, waiting 60s")
-            time.sleep(60)
-            continue
-        if r.status_code >= 400:
-            print(f"  Gemini error {r.status_code}: {r.text[:400]}")
-        r.raise_for_status()
-        try:
-            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            data = json.loads(re.sub(r"^```(json)?|```$", "", text.strip()))
-            if 6 <= len(data["scenes"]) <= 16:
-                _MODEL = model          # remember the working model for the next videos
-                return data
-        except (json.JSONDecodeError, KeyError, IndexError):
-            pass
-        print(f"  script attempt {attempt + 1} was malformed, retrying")
+
+        print(f"  {model}: error {code} {text_body[:160]}")
+        retired = code in (400, 404) and "model" in text_body.lower()
+        if code in (401, 403) and not retired:
+            raise RuntimeError("Gemini key rejected - check the GEMINI_API_KEY secret")
+        if not listed:                       # first problem -> learn all models
+            listed = True
+            queue += [m for m in candidate_models() if m not in queue]
+        if retired or attempt % 2 == 0:      # retired, or failed twice -> next model
+            queue.pop(0)
+        wait = 0 if retired else min(15 * attempt, 90)   # busy -> wait, then retry
+        if wait:
+            print(f"  waiting {wait}s before retry")
+            time.sleep(wait)
     raise RuntimeError("Gemini did not return a valid script")
