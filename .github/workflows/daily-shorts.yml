@@ -1,8 +1,10 @@
 name: Daily Hindi Shorts
 
 on:
-  schedule:
-    - cron: "30 20 * * *"   # 02:00 AM IST every day
+  # Daily shorts paused (channel focuses on long videos). To restart, remove the
+  # "#" from the two lines below.
+  # schedule:
+  #   - cron: "30 20 * * *"   # 02:00 AM IST every day
   workflow_dispatch:         # "Run workflow" button for manual/test runs
     inputs:
       count:

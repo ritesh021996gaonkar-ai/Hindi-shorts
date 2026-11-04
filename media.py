@@ -74,10 +74,10 @@ def ai_video(prompt, out_path):
     return False
 
 
-def ai_image(prompt, out_path, seed):
+def ai_image(prompt, out_path, seed, width=1080, height=1920):
     """Free AI image (Pollinations). Returns True on success."""
     url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt[:900])
-           + f"?width=1080&height=1920&nologo=true&seed={seed}")
+           + f"?width={width}&height={height}&nologo=true&seed={seed}")
     for attempt in range(5):
         try:
             r = requests.get(url, timeout=240)

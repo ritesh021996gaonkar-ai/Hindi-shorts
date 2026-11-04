@@ -20,7 +20,7 @@ def _client():
     return build("youtube", "v3", credentials=creds, cache_discovery=False)
 
 
-def upload(path, title, description, tags, publish_at_utc=None):
+def upload(path, title, description, tags, publish_at_utc=None, shorts=True):
     """publish_at_utc: 'YYYY-MM-DDTHH:MM:SSZ' to schedule, or None for a private draft."""
     status = {
         "privacyStatus": "private",
@@ -34,7 +34,7 @@ def upload(path, title, description, tags, publish_at_utc=None):
             "title": title[:100],
             "description": description[:4900],
             "tags": tags[:15],
-            "categoryId": "27",            # Education
+            "categoryId": "27",            # Education (both shorts and long videos)
             "defaultLanguage": "hi",
             "defaultAudioLanguage": "hi",
         },
@@ -48,3 +48,10 @@ def upload(path, title, description, tags, publish_at_utc=None):
     while resp is None:
         _, resp = req.next_chunk()
     return resp["id"]
+
+
+def set_thumbnail(video_id, image_path):
+    """Custom thumbnail (needs a phone-verified YouTube channel)."""
+    _client().thumbnails().set(
+        videoId=video_id,
+        media_body=MediaFileUpload(str(image_path), mimetype="image/jpeg")).execute()

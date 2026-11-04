@@ -86,9 +86,15 @@ def write_script(avoid_topics):
         character=CHARACTER,
         avoid="; ".join(avoid_topics[-150:]) or "none",
     )
+    return ask_json(prompt, lambda d: 6 <= len(d["scenes"]) <= 16)
+
+
+def ask_json(prompt, valid=lambda d: True, temperature=1.0):
+    """Sends a prompt to Gemini and returns parsed JSON. Retries busy servers and
+    rotates through available models automatically."""
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 1.0,
+        "generationConfig": {"temperature": temperature,
                              "responseMimeType": "application/json"},
     }
     global _MODEL
@@ -109,13 +115,12 @@ def write_script(avoid_topics):
             try:
                 text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
                 data = json.loads(re.sub(r"^```(json)?|```$", "", text.strip()))
-                if 6 <= len(data["scenes"]) <= 16:
+                if valid(data):
                     _MODEL = model          # remember the working model
-                    print(f"  script written with {model}")
                     return data
             except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                 pass
-            print(f"  {model}: script was malformed, retrying")
+            print(f"  {model}: answer was malformed, retrying")
             continue
 
         print(f"  {model}: error {code} {text_body[:160]}")
@@ -131,4 +136,4 @@ def write_script(avoid_topics):
         if wait:
             print(f"  waiting {wait}s before retry")
             time.sleep(wait)
-    raise RuntimeError("Gemini did not return a valid script")
+    raise RuntimeError("Gemini did not return a valid answer")
