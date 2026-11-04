@@ -52,19 +52,26 @@ Format of every short (fast, curious, 3D-animated explainer style):
 - Facts must be accurate. No medical advice, no gore, nothing graphic or scary
   for children, no real people, no brands, no copyrighted characters.
 
-For each scene also write "visual": an ENGLISH prompt for an AI video model.
-Every visual prompt must start with:
-"Stylized 3D animation, soft cinematic lighting, vertical 9:16, "
-and describe ONE clear shot with simple motion. Use the SAME original main
-character in every scene: "{character}". Never mention any existing show,
-creator, film or character.
+For each scene also write, in ENGLISH:
+- "visual": an image prompt that shows EXACTLY what that scene's narration says
+  (the same object, body part, place or event - literal, easy to understand).
+  Start with "Stylized 3D cartoon animation render, vibrant colors, soft
+  cinematic lighting, highly detailed, vertical composition, " then describe
+  ONE clear shot: subject, action, setting, camera angle (close-up / wide /
+  top-down / inside-the-body etc). Vary the camera angle from scene to scene.
+  When a person is needed, use the SAME original mascot: "{character}".
+- "motion": one sentence describing how things MOVE in the next 5 seconds
+  (e.g. "the robot jumps back in surprise as the ground cracks, camera slowly
+  pushes in"). Strong, clear, physical motion; one main action.
+Never mention any existing show, creator, film, brand or real person.
 
 Avoid these topics, already used: {avoid}
 
 Return ONLY JSON:
 {{"topic_en": "...", "title": "Hindi title under 70 chars with 1 emoji",
   "description": "2-3 Hindi sentences", "tags": ["8-12 tags, Hindi and English"],
-  "scenes": [{{"narration": "Hindi sentence", "visual": "English prompt"}}]}}
+  "scenes": [{{"narration": "Hindi sentence", "visual": "English image prompt",
+               "motion": "English motion sentence"}}]}}
 """
 
 # The channel's own mascot. Change it if you like, but keep it your own design.

@@ -100,17 +100,42 @@ VF_FIT = (f"scale={config.W}:{config.H}:force_original_aspect_ratio=increase,"
 ENC = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-an"]
 
 
-def scene_clip(visual_prompt, dur, use_ai_video, work, idx):
+def fit_clip(src, dur, out):
+    """Turns an AI clip of any length into exactly `dur` seconds of 1080x1920.
+    Short clips are slowed down a little (max 1.6x), then the last frame is held."""
+    src_d = duration(src)
+    slow = min(max(dur / max(src_d, 0.1), 1.0), 1.6)
+    vf = (f"setpts={slow:.4f}*PTS,"
+          f"scale={config.W}:{config.H}:force_original_aspect_ratio=increase:flags=lanczos,"
+          f"crop={config.W}:{config.H},unsharp=5:5:0.6,fps={config.FPS},"
+          f"tpad=stop_mode=clone:stop_duration={dur + 1:.2f},setsar=1,format=yuv420p")
+    run(["ffmpeg", "-y", "-i", str(src), "-vf", vf, "-t", f"{dur:.3f}", *ENC, str(out)])
+
+
+def scene_clip(visual_prompt, dur, use_ai_video, work, idx, kaggle_clip=None, kaggle_image=None):
     """Makes an exactly `dur`-second 1080x1920 silent clip for one scene."""
     out = work / f"scene_{idx:02d}.mp4"
     raw_vid, raw_img = work / f"raw_{idx:02d}.mp4", work / f"raw_{idx:02d}.jpg"
+    global LAST_IMAGE
+
+    if kaggle_clip:                       # free animated clip from Kaggle GPU
+        try:
+            fit_clip(kaggle_clip, dur, out)
+            if kaggle_image:
+                LAST_IMAGE = kaggle_image
+            return out, "kaggle-video"
+        except Exception as e:
+            print(f"  kaggle clip unusable: {e}")
+
+    if kaggle_image:                      # image made, animation missing -> camera move
+        LAST_IMAGE = kaggle_image
+        kenburns(kaggle_image, dur, idx, out)
+        return out, "kaggle-image"
 
     if use_ai_video and ai_video(visual_prompt, raw_vid):
-        run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(raw_vid), "-t", f"{dur:.3f}",
-             "-vf", VF_FIT, *ENC, str(out)])
+        fit_clip(raw_vid, dur, out)
         return out, "ai-video"
 
-    global LAST_IMAGE
     if ai_image(visual_prompt, raw_img, seed=random.randint(1, 10**6)):
         LAST_IMAGE = raw_img
         kenburns(raw_img, dur, idx, out)

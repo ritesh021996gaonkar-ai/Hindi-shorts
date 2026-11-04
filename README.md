@@ -7,7 +7,7 @@ The default posting times are 9:00, 12:30, 16:00, 19:00 and 21:30.
 **How each short is made:**
 1. **Script:** Gemini (free) writes a new Hindi "Kya hoga agar…" script, about 150 words long. It never repeats a past topic.
 2. **Voice:** a natural Hindi voice is generated for free with Microsoft Edge TTS.
-3. **Visuals:** each scene gets a free 3D-style AI image with a moving camera (push in, pull out, pan, tilt), so it feels animated.
+3. **Visuals:** each scene gets a 3D-style AI image that matches its narration line. A **free Kaggle GPU** then animates it into a ~5 second video clip with the open-source LTX-Video model. If Kaggle isn't set up or fails, the image is animated with camera moves instead.
 4. **Captions:** bold Hindi captions are added, 3 words at a time, with the hook in yellow.
 5. **Upload:** the finished 1080×1920 video goes to YouTube with its title and tags, and is scheduled. It is marked "AI-generated", as YouTube requires.
 
@@ -70,6 +70,12 @@ Tip: in Chrome, tap ⋮ and turn on **Desktop site** for the Google Cloud and Gi
 > - Videos will arrive in YouTube Studio as private drafts. Watch each one and tap **Publish**, which is a good habit anyway.
 > - To let videos go public on schedule by themselves, submit the free **YouTube API Services audit form**: https://support.google.com/youtube/contact/yt_api_form. It takes a few days to a few weeks.
 > - After you're approved, change `AUTO_PUBLISH` to `true`.
+
+### 5b. Free animated clips (Kaggle)
+1. Sign up at https://www.kaggle.com and verify your phone number at https://www.kaggle.com/settings. Without phone verification, the GPU stays locked.
+2. On https://www.kaggle.com/settings, go to **API → Generate New Token** and copy the token.
+3. In GitHub, add a secret called `KAGGLE_API_TOKEN` and paste the token.
+4. Kaggle gives 30 free GPU hours a week. The bot stops starting new clips after 200 minutes a day (variable `KAGGLE_BUDGET_MIN`). Any scenes left over get camera-move images.
 
 ### 6. Test run
 1. Open the **Actions** tab and choose **Daily Hindi Shorts → Run workflow**.

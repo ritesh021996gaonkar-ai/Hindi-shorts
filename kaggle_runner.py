@@ -1,0 +1,103 @@
+"""Sends the day's scenes to a free Kaggle GPU, waits, and downloads the clips.
+
+Needs the GitHub secret KAGGLE_API_TOKEN (Kaggle > Settings > API > Generate New Token).
+If anything goes wrong, it returns what it has and the bot falls back to
+animated still images, so the daily videos are never lost."""
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import time
+
+ROOT = pathlib.Path(__file__).parent
+SLUG = "hindi-shorts-animator"
+
+
+def enabled():
+    return bool(os.environ.get("KAGGLE_API_TOKEN", "").strip())
+
+
+def _kaggle(*args, timeout=600):
+    p = subprocess.run(["kaggle", *args], capture_output=True, text=True, timeout=timeout)
+    return p.returncode, (p.stdout + p.stderr).strip()
+
+
+def _username():
+    if os.environ.get("KAGGLE_USERNAME"):
+        return os.environ["KAGGLE_USERNAME"].strip()
+    from kaggle.api.kaggle_api_extended import KaggleApi
+    api = KaggleApi()
+    api.authenticate()
+    return api.config_values.get("username")
+
+
+def animate(jobs, out_dir, settings, max_wait_min=300):
+    """jobs: list of {id, image_prompt, video_prompt, seed}. Returns {id: {"clip":..., "image":...}}."""
+    out_dir = pathlib.Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if not jobs:
+        return {}
+    user = _username()
+    kid = f"{user}/{SLUG}"
+    print(f"  kaggle: account {user}, {len(jobs)} scenes")
+
+    code_rc, quota = _kaggle("quota")
+    if code_rc == 0:
+        print("  kaggle quota:", " ".join(quota.split())[:300])
+
+    folder = out_dir / "kernel"
+    folder.mkdir(exist_ok=True)
+    src = (ROOT / "kaggle_worker" / "animate.py").read_text(encoding="utf-8")
+    src = src.replace("JOBS = []  # replaced automatically",
+                      "JOBS = " + json.dumps(jobs, ensure_ascii=True), 1)
+    src = src.replace("SETTINGS = {}  # replaced automatically",
+                      "SETTINGS = " + json.dumps(settings), 1)
+    (folder / "animate.py").write_text(src, encoding="utf-8")
+    (folder / "kernel-metadata.json").write_text(json.dumps({
+        "id": kid, "title": SLUG, "code_file": "animate.py",
+        "language": "python", "kernel_type": "script", "is_private": True,
+        "enable_gpu": True, "enable_internet": True, "machine_shape": "NvidiaTeslaT4",
+        "dataset_sources": [], "competition_sources": [], "kernel_sources": [],
+    }, indent=1))
+
+    rc, msg = _kaggle("kernels", "push", "-p", str(folder), "--accelerator", "NvidiaTeslaT4")
+    print("  kaggle push:", msg[-400:])
+    if rc != 0 or "error" in msg.lower() and "successfully" not in msg.lower():
+        raise RuntimeError("kaggle push failed: " + msg[-400:])
+
+    time.sleep(60)
+    deadline = time.time() + max_wait_min * 60
+    status, last = "", ""
+    while time.time() < deadline:
+        rc, msg = _kaggle("kernels", "status", kid, timeout=120)
+        m = re.search(r'status "?([A-Za-z_.]+)', msg)
+        status = (m.group(1) if m else msg).lower()
+        if status != last:
+            print(f"  kaggle status: {status}  ({time.strftime('%H:%M')})")
+            last = status
+        if any(s in status for s in ("complete", "error", "cancel")):
+            break
+        time.sleep(60)
+    else:
+        print("  kaggle: still running at our deadline, downloading what exists")
+
+    dl = out_dir / "kaggle_out"
+    shutil.rmtree(dl, ignore_errors=True)
+    dl.mkdir()
+    rc, msg = _kaggle("kernels", "output", kid, "-p", str(dl), "-o", timeout=1800)
+    print("  kaggle download:", msg[-300:])
+    for log in list(dl.rglob("*.log")) + list(dl.rglob("*.txt")):
+        text = log.read_text(errors="ignore")
+        print(f"  ---- kaggle log ({log.name}), last lines ----")
+        print("\n".join(text.splitlines()[-60:]))
+
+    result = {}
+    for j in jobs:
+        clip = next(iter(dl.rglob(f"{j['id']}.mp4")), None)
+        img = next(iter(dl.rglob(f"{j['id']}.jpg")), None)
+        result[j["id"]] = {"clip": clip, "image": img}
+    got = sum(1 for r in result.values() if r["clip"])
+    print(f"  kaggle: {got}/{len(jobs)} clips received (status: {status})")
+    return result
