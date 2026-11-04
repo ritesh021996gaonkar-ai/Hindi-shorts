@@ -74,8 +74,73 @@ def ai_video(prompt, out_path):
     return False
 
 
+_GEMINI_IMG = {"models": None, "off": False}
+
+
+def gemini_image(prompt, out_path, aspect):
+    """Image from Gemini (uses your GEMINI_API_KEY). Returns True on success.
+    Switches itself off for the rest of the run if the key has no image quota."""
+    import base64
+    if _GEMINI_IMG["off"] or not config.GEMINI_API_KEY:
+        return False
+    api = "https://generativelanguage.googleapis.com/v1beta"
+    hdr = {"x-goog-api-key": config.GEMINI_API_KEY.strip()}
+    if _GEMINI_IMG["models"] is None:
+        try:
+            r = requests.get(f"{api}/models", headers=hdr, params={"pageSize": 200}, timeout=60)
+            names = [m["name"].split("/")[-1] for m in r.json().get("models", [])
+                     if "generateContent" in m.get("supportedGenerationMethods", [])]
+            img = [n for n in names if "image" in n and "gemini" in n]
+            img.sort(key=lambda n: ("preview" in n, "flash" not in n, n), reverse=False)
+            _GEMINI_IMG["models"] = img
+            print(f"  gemini image models: {', '.join(img) or 'none'}")
+        except Exception as e:
+            print(f"  gemini image: could not list models ({e})")
+            _GEMINI_IMG["models"] = []
+    if not _GEMINI_IMG["models"]:
+        _GEMINI_IMG["off"] = True
+        return False
+    body = {"contents": [{"parts": [{"text": "Generate an image. " + prompt}]}],
+            "generationConfig": {"responseModalities": ["IMAGE"],
+                                 "imageConfig": {"aspectRatio": aspect}}}
+    for model in list(_GEMINI_IMG["models"]):
+        for attempt in range(3):
+            try:
+                r = requests.post(f"{api}/models/{model}:generateContent", headers=hdr,
+                                  json=body, timeout=180)
+            except requests.RequestException as e:
+                print(f"  gemini image {model}: {type(e).__name__}")
+                time.sleep(10)
+                continue
+            if r.status_code == 200:
+                for part in r.json().get("candidates", [{}])[0].get("content", {}).get("parts", []):
+                    data = part.get("inlineData") or part.get("inline_data")
+                    if data and data.get("data"):
+                        out_path.write_bytes(base64.b64decode(data["data"]))
+                        return True
+                print(f"  gemini image {model}: no image in answer")
+                break
+            txt = r.text[:200]
+            if r.status_code == 429 and ("limit: 0" in txt or "free_tier" in txt.lower() or attempt == 2):
+                print(f"  gemini image {model}: no free quota left ({txt[:120]})")
+                _GEMINI_IMG["models"].remove(model)
+                break
+            if r.status_code in (400, 403, 404):
+                print(f"  gemini image {model}: {r.status_code} {txt[:120]}")
+                _GEMINI_IMG["models"].remove(model)
+                break
+            time.sleep(15 * (attempt + 1))        # busy -> wait and retry
+    if not _GEMINI_IMG["models"]:
+        print("  gemini image: switching to the free Pollinations service")
+        _GEMINI_IMG["off"] = True
+    return False
+
+
 def ai_image(prompt, out_path, seed, width=1080, height=1920):
-    """Free AI image (Pollinations). Returns True on success."""
+    """AI image: Gemini first (fast), then free Pollinations. Returns True on success."""
+    aspect = "16:9" if width > height else ("9:16" if height > width else "1:1")
+    if gemini_image(prompt, out_path, aspect):
+        return True
     url = ("https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt[:900])
            + f"?width={width}&height={height}&nologo=true&seed={seed}")
     for attempt in range(5):
