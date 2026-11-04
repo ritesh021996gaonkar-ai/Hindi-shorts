@@ -83,22 +83,24 @@ Return ONLY JSON: {{"scenes": [{{"narration": "...", "visual": "..."}}]}}
 """
 
 
-def write_long_script(avoid, topic=None):
+def write_long_script(avoid, topic=None, sample=False):
     from script_writer import ask_json
     topic_line = f'\nThe topic MUST be: "{topic}".' if topic else ""
     outline = ask_json(OUTLINE.format(niche=NICHE, minutes=MINUTES, topic_line=topic_line,
                                       avoid="; ".join(avoid[-100:]) or "none"),
                        lambda d: 5 <= len(d["chapters"]) <= 12 and d["title"])
+    if sample:                                   # quick preview: first 2 chapters only
+        outline["chapters"] = outline["chapters"][:2]
     print(f"  outline: {outline['title']} ({len(outline['chapters'])} chapters)")
     short_outline = " | ".join(f"{i + 1}. {c['title']}" for i, c in enumerate(outline["chapters"]))
     total_words = MINUTES * 130                   # Hindi narration ~130 words/minute
-    per_ch = max(120, total_words // len(outline["chapters"]))
+    per_ch = 90 if sample else max(120, total_words // len(outline["chapters"]))
     prev = "(this is the start)"
     for n, ch in enumerate(outline["chapters"], 1):
         data = ask_json(CHAPTER.format(
             n=n, total=len(outline["chapters"]), title=outline["title"], outline=short_outline,
             ch_title=ch["title"], summary=ch.get("summary", ""), prev=prev,
-            words=per_ch, scenes=max(6, per_ch // 22)),
+            words=per_ch, scenes=5 if sample else max(6, per_ch // 22)),
             lambda d: len(d["scenes"]) >= 4 and all(s["narration"] and s["visual"] for s in d["scenes"]),
             temperature=0.9)
         ch["scenes"] = data["scenes"]
@@ -320,14 +322,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-upload", action="store_true")
     ap.add_argument("--mock", action="store_true")
+    ap.add_argument("--sample", action="store_true", help="quick ~1 minute preview, no upload")
     ap.add_argument("--topic", default=os.environ.get("LONG_TOPIC", "").strip() or None)
     args = ap.parse_args()
-    if args.mock:
+    if args.mock or args.sample:
         args.no_upload = True
 
     OUT.mkdir(exist_ok=True)
     history = json.loads(HISTORY.read_text(encoding="utf-8")) if HISTORY.exists() else []
-    script = mock_script() if args.mock else write_long_script([h["topic"] for h in history], args.topic)
+    script = mock_script() if args.mock else write_long_script([h["topic"] for h in history], args.topic, args.sample)
     work = OUT / "long_work"
     work.mkdir(parents=True, exist_ok=True)
     (work / "script.json").write_text(json.dumps(script, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -353,7 +356,7 @@ def main():
             print("  thumbnail set")
         except Exception as e:
             print(f"  thumbnail not set (verify your channel's phone number to allow custom thumbnails): {e}")
-    if not args.mock:
+    if not args.mock and not args.sample:
         history.append({"topic": script["topic_en"], "title": script["title"], "id": video_id,
                         "date": dt.date.today().isoformat()})
         HISTORY.parent.mkdir(exist_ok=True)
