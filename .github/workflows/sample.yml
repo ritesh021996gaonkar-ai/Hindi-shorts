@@ -61,7 +61,7 @@ jobs:
         if: always()
         run: |
           ls output/*.preview.jpg >/dev/null 2>&1 || exit 0
-          mkdir -p /tmp/prev && cp output/*.preview.jpg output/long_work/script.json output/long_work/description.txt /tmp/prev/ 2>/dev/null || true
+          mkdir -p /tmp/prev && cp output/*.preview.jpg output/*.mp4 output/long_work/script.json output/long_work/description.txt /tmp/prev/ 2>/dev/null || true
           cd /tmp/prev
           git init -q && git checkout -q -b previews
           git config user.name "shorts-bot"
