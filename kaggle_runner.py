@@ -1,4 +1,5 @@
-"""Sends the day's scenes to a free Kaggle GPU, waits, and downloads the clips.
+"""Sends work to a free Kaggle GPU (animated clips for shorts, or painted
+pictures for documentaries), waits, and downloads the results.
 
 Needs the GitHub secret KAGGLE_API_TOKEN (Kaggle > Settings > API > Generate New Token).
 If anything goes wrong, it returns what it has and the bot falls back to
@@ -33,15 +34,14 @@ def _username():
     return api.config_values.get("username")
 
 
-def animate(jobs, out_dir, settings, max_wait_min=300):
-    """jobs: list of {id, image_prompt, video_prompt, seed}. Returns {id: {"clip":..., "image":...}}."""
+def _run_kernel(slug, worker_file, jobs, settings, out_dir, max_wait_min):
+    """Pushes kaggle_worker/<worker_file> with the jobs inside, waits, downloads the output.
+    Returns (download_folder, final_status)."""
     out_dir = pathlib.Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    if not jobs:
-        return {}
     user = _username()
-    kid = f"{user}/{SLUG}"
-    print(f"  kaggle: account {user}, {len(jobs)} scenes")
+    kid = f"{user}/{slug}"
+    print(f"  kaggle: account {user}, {len(jobs)} jobs ({worker_file})")
 
     code_rc, quota = _kaggle("quota")
     if code_rc == 0:
@@ -49,14 +49,14 @@ def animate(jobs, out_dir, settings, max_wait_min=300):
 
     folder = out_dir / "kernel"
     folder.mkdir(exist_ok=True)
-    src = (ROOT / "kaggle_worker" / "animate.py").read_text(encoding="utf-8")
+    src = (ROOT / "kaggle_worker" / worker_file).read_text(encoding="utf-8")
     src = src.replace("JOBS = []  # replaced automatically",
                       "JOBS = " + json.dumps(jobs, ensure_ascii=True), 1)
     src = src.replace("SETTINGS = {}  # replaced automatically",
                       "SETTINGS = " + json.dumps(settings), 1)
-    (folder / "animate.py").write_text(src, encoding="utf-8")
+    (folder / worker_file).write_text(src, encoding="utf-8")
     (folder / "kernel-metadata.json").write_text(json.dumps({
-        "id": kid, "title": SLUG, "code_file": "animate.py",
+        "id": kid, "title": slug, "code_file": worker_file,
         "language": "python", "kernel_type": "script", "is_private": True,
         "enable_gpu": True, "enable_internet": True, "machine_shape": "NvidiaTeslaT4",
         "dataset_sources": [], "competition_sources": [], "kernel_sources": [],
@@ -67,7 +67,7 @@ def animate(jobs, out_dir, settings, max_wait_min=300):
     if rc != 0 or "error" in msg.lower() and "successfully" not in msg.lower():
         raise RuntimeError("kaggle push failed: " + msg[-400:])
 
-    time.sleep(60)
+    time.sleep(45)
     deadline = time.time() + max_wait_min * 60
     status, last = "", ""
     while time.time() < deadline:
@@ -79,7 +79,7 @@ def animate(jobs, out_dir, settings, max_wait_min=300):
             last = status
         if any(s in status for s in ("complete", "error", "cancel")):
             break
-        time.sleep(60)
+        time.sleep(30)
     else:
         print("  kaggle: still running at our deadline, downloading what exists")
 
@@ -92,7 +92,14 @@ def animate(jobs, out_dir, settings, max_wait_min=300):
         text = log.read_text(errors="ignore")
         print(f"  ---- kaggle log ({log.name}), last lines ----")
         print("\n".join(text.splitlines()[-60:]))
+    return dl, status
 
+
+def animate(jobs, out_dir, settings, max_wait_min=300):
+    """Shorts: jobs = [{id, image_prompt, video_prompt, seed}] -> {id: {"clip", "image"}}."""
+    if not jobs:
+        return {}
+    dl, status = _run_kernel(SLUG, "animate.py", jobs, settings, out_dir, max_wait_min)
     result = {}
     for j in jobs:
         clip = next(iter(dl.rglob(f"{j['id']}.mp4")), None)
@@ -100,4 +107,19 @@ def animate(jobs, out_dir, settings, max_wait_min=300):
         result[j["id"]] = {"clip": clip, "image": img}
     got = sum(1 for r in result.values() if r["clip"])
     print(f"  kaggle: {got}/{len(jobs)} clips received (status: {status})")
+    return result
+
+
+def paint(jobs, out_dir, settings, max_wait_min=150):
+    """Documentaries: jobs = [{id, prompt, seed, style?}] -> {id: picture path}.
+    Missing pictures are simply absent (the caller falls back to other sources)."""
+    if not jobs:
+        return {}
+    dl, status = _run_kernel("hindi-docu-painter", "paint.py", jobs, settings, out_dir, max_wait_min)
+    result = {}
+    for j in jobs:
+        img = next(iter(dl.rglob(f"{j['id']}.jpg")), None)
+        if img and img.stat().st_size > 20000:
+            result[j["id"]] = img
+    print(f"  kaggle: {len(result)}/{len(jobs)} pictures received (status: {status})")
     return result

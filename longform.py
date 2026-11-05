@@ -76,8 +76,11 @@ For each scene also write "visual": an ENGLISH picture description that shows
 EXACTLY what that narration is about (the place, people, object, event or map),
 with era-correct clothes, buildings and tools. One clear shot; vary the angle
 (wide landscape, close-up of hands/objects, aerial view, cutaway diagram, old map
-on a table, people at work). Do NOT include any text or letters in the picture.
-Do not depict real modern people.
+on a table, people at work). Every visual must stand on its own: ALWAYS name the
+era and place in it (e.g. "ancient Harappan city, around 2500 BCE, ..."), never
+anything from a later era. Keep it under 40 words, concrete nouns first. Prefer
+wide scenes, buildings, objects and small figures; avoid close-ups of hands and faces.
+Do NOT include any text or letters in the picture. Do not depict real modern people.
 
 Return ONLY JSON: {{"scenes": [{{"narration": "...", "visual": "..."}}]}}
 """
@@ -121,9 +124,38 @@ def mock_script():
 
 # ---------------- pictures ----------------
 LAST_IMG = [None]
+PAINTED = {}        # pictures made on the free Kaggle GPU: {"s000": path, "thumb": path}
 
 
-def picture(prompt, path, mock=False):
+def paint_all(scenes, script):
+    """Paint every picture at once on the free Kaggle GPU (if a Kaggle token is set)."""
+    import kaggle_runner
+    if not kaggle_runner.enabled():
+        print("  Kaggle not set up (no KAGGLE_API_TOKEN) -> pictures from the free web service")
+        return
+    base = random.randint(1, 10**6)          # same seed family = more consistent look
+    jobs = [{"id": f"s{k:03d}", "prompt": sc["visual"], "seed": base + k} for k, sc in enumerate(scenes)]
+    jobs.append({"id": "thumb", "seed": base,
+                 "prompt": script.get("thumbnail_scene", script["topic_en"]) + ", simple bright sky in the top third",
+                 "style": "vibrant detailed illustration, bold colors, epic dramatic lighting, clean linework"})
+    try:
+        settings = {"steps": int(os.environ.get("KAGGLE_STEPS") or 28),
+                    "budget_minutes": int(os.environ.get("KAGGLE_BUDGET_MIN") or 150)}
+        PAINTED.update(kaggle_runner.paint(jobs, work_dir() / "kaggle", settings))
+    except Exception:
+        traceback.print_exc()
+        print("  Kaggle painting failed -> pictures from the free web service")
+
+
+def work_dir():
+    return OUT / "long_work"
+
+
+def picture(prompt, path, mock=False, key=None):
+    if key in PAINTED:
+        media.run(["ffmpeg", "-y", "-v", "error", "-i", str(PAINTED[key]), "-q:v", "2", str(path)])
+        LAST_IMG[0] = path
+        return path
     if mock:
         media.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
                    f"testsrc2=s=1280x720", "-frames:v", "1", str(path)])
@@ -166,7 +198,9 @@ def thumbnail(script, work, mock=False):
     prompt = ("Vibrant detailed hand-drawn illustration, bold colors, epic and dramatic, "
               "clean linework, simple bright sky in the top third, no text. "
               + script.get("thumbnail_scene", script["title"]))
-    if mock or not media.ai_image(prompt, base, seed=random.randint(1, 10**6), width=1280, height=720):
+    if "thumb" in PAINTED:
+        media.run(["ffmpeg", "-y", "-v", "error", "-i", str(PAINTED["thumb"]), "-q:v", "2", str(base)])
+    elif mock or not media.ai_image(prompt, base, seed=random.randint(1, 10**6), width=1280, height=720):
         media.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=1280x720",
                    "-frames:v", "1", str(base)])
     ass = work / "thumb.ass"
@@ -249,9 +283,11 @@ def build(script, work, mock=False):
     total = sum(durs)
     print(f"  narration: {len(scenes)} scenes, {total / 60:.1f} minutes")
 
+    if not mock:
+        paint_all(scenes, script)
     clips = []
     for k, (sc, d) in enumerate(zip(scenes, durs)):
-        img = picture(sc["visual"], work / f"img{k:03d}.jpg", mock)
+        img = picture(sc["visual"], work / f"img{k:03d}.jpg", mock, key=f"s{k:03d}")
         c = work / f"c{k:03d}.mp4"
         scene_video(img, d, k, c)
         clips.append(c)
@@ -331,7 +367,7 @@ def main():
     OUT.mkdir(exist_ok=True)
     history = json.loads(HISTORY.read_text(encoding="utf-8")) if HISTORY.exists() else []
     script = mock_script() if args.mock else write_long_script([h["topic"] for h in history], args.topic, args.sample)
-    work = OUT / "long_work"
+    work = work_dir()
     work.mkdir(parents=True, exist_ok=True)
     (work / "script.json").write_text(json.dumps(script, ensure_ascii=False, indent=1), encoding="utf-8")
 
