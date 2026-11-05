@@ -12,6 +12,9 @@ on:
       minutes:
         description: "Length in minutes"
         default: "12"
+      reuse:
+        description: "Reuse the last sample's script? (yes/no)"
+        default: "no"
 
 permissions:
   contents: write
@@ -55,7 +58,12 @@ jobs:
         run: |
           ARGS=""
           if [ "${{ github.event.inputs.upload }}" = "no" ]; then ARGS="--no-upload"; fi
-          python longform.py --sample
+          if [ "${{ github.event.inputs.reuse }}" = "yes" ]; then
+            git fetch -q --depth 1 origin sample-previews
+            git show FETCH_HEAD:script.json > /tmp/reuse.json
+            ARGS="$ARGS --script /tmp/reuse.json"
+          fi
+          python longform.py --sample $ARGS
 
       - name: Publish preview images (branch "previews")
         if: always()

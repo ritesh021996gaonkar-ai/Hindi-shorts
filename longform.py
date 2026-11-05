@@ -359,6 +359,7 @@ def main():
     ap.add_argument("--no-upload", action="store_true")
     ap.add_argument("--mock", action="store_true")
     ap.add_argument("--sample", action="store_true", help="quick ~1 minute preview, no upload")
+    ap.add_argument("--script", help="reuse a script.json made earlier (no Gemini needed)")
     ap.add_argument("--topic", default=os.environ.get("LONG_TOPIC", "").strip() or None)
     args = ap.parse_args()
     if args.mock or args.sample:
@@ -366,7 +367,10 @@ def main():
 
     OUT.mkdir(exist_ok=True)
     history = json.loads(HISTORY.read_text(encoding="utf-8")) if HISTORY.exists() else []
-    script = mock_script() if args.mock else write_long_script([h["topic"] for h in history], args.topic, args.sample)
+    if args.script:
+        script = json.loads(pathlib.Path(args.script).read_text(encoding="utf-8"))
+    else:
+        script = mock_script() if args.mock else write_long_script([h["topic"] for h in history], args.topic, args.sample)
     work = work_dir()
     work.mkdir(parents=True, exist_ok=True)
     (work / "script.json").write_text(json.dumps(script, ensure_ascii=False, indent=1), encoding="utf-8")
