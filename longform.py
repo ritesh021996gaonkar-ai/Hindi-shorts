@@ -72,8 +72,13 @@ Each scene = 1 or 2 spoken sentences (15 to 30 words), Devanagari script, natura
 storytelling Hindi (like a good narrator talking to a friend), smooth flow from
 scene to scene. Accurate facts only.
 
-For each scene also write "visual": an ENGLISH picture description that shows
-EXACTLY what that narration is about (the place, people, object, event or map),
+The picture on screen must CHANGE EVERY 3-4 SECONDS, following the words. So cut
+every scene into "parts" of 4 to 9 Hindi words each (2 to 4 parts per scene), cut at
+natural phrase breaks. Joined together, the parts' "say" texts must be exactly the
+scene's narration.
+
+For each part write "visual": an ENGLISH picture description that shows
+EXACTLY what those words are about (the place, people, object, event or map),
 with era-correct clothes, buildings and tools. One clear shot; vary the angle
 (wide landscape, close-up of hands/objects, aerial view, cutaway diagram, old map
 on a table, people at work). Every visual must stand on its own: ALWAYS name the
@@ -82,7 +87,11 @@ anything from a later era. Keep it under 40 words, concrete nouns first. Prefer
 wide scenes, buildings, objects and small figures; avoid close-ups of hands and faces.
 Do NOT include any text or letters in the picture. Do not depict real modern people.
 
-Return ONLY JSON: {{"scenes": [{{"narration": "...", "visual": "..."}}]}}
+Consecutive parts should feel like different camera shots of the same story
+(wide view, then a detail, then people reacting...), never the same picture twice.
+
+Return ONLY JSON: {{"scenes": [{{"narration": "full scene text",
+  "parts": [{{"say": "first 4-9 words", "visual": "..."}}, {{"say": "next words", "visual": "..."}}]}}]}}
 """
 
 
@@ -104,7 +113,9 @@ def write_long_script(avoid, topic=None, sample=False):
             n=n, total=len(outline["chapters"]), title=outline["title"], outline=short_outline,
             ch_title=ch["title"], summary=ch.get("summary", ""), prev=prev,
             words=per_ch, scenes=5 if sample else max(6, per_ch // 22)),
-            lambda d: len(d["scenes"]) >= 4 and all(s["narration"] and s["visual"] for s in d["scenes"]),
+            lambda d: len(d["scenes"]) >= 4 and all(
+                s["narration"] and s["parts"] and all(p["say"] and p["visual"] for p in s["parts"])
+                for s in d["scenes"]),
             temperature=0.9)
         ch["scenes"] = data["scenes"]
         prev = ch["scenes"][-1]["narration"]
@@ -127,6 +138,29 @@ LAST_IMG = [None]
 PAINTED = {}        # pictures made on the free Kaggle GPU: {"s000": path, "thumb": path}
 
 
+def scene_parts(sc):
+    """The picture changes for every part of a scene (old scripts: one part)."""
+    parts = [p for p in sc.get("parts") or [] if p.get("say") and p.get("visual")]
+    return parts or [{"say": sc["narration"], "visual": sc["visual"]}]
+
+
+def split_time(parts, dur, min_shot=1.6):
+    """Share a scene's voice duration between its parts, by length of the words.
+    Very short parts are merged into the previous one (it keeps its picture)."""
+    total = sum(len(p["say"]) for p in parts) or 1
+    shots = []
+    for p in parts:
+        t = dur * len(p["say"]) / total
+        if shots and t < min_shot:
+            shots[-1][1] += t
+        else:
+            shots.append([p, t])
+    if len(shots) > 1 and shots[0][1] < min_shot:
+        shots[1][1] += shots[0][1]
+        shots.pop(0)
+    return shots
+
+
 def paint_all(scenes, script):
     """Paint every picture at once on the free Kaggle GPU (if a Kaggle token is set)."""
     import kaggle_runner
@@ -135,6 +169,7 @@ def paint_all(scenes, script):
         return
     base = random.randint(1, 10**6)          # same seed family = more consistent look
     jobs = [{"id": f"s{k:03d}", "prompt": sc["visual"], "seed": base + k} for k, sc in enumerate(scenes)]
+    print(f"  {len(jobs)} pictures to paint")
     jobs.append({"id": "thumb", "seed": base,
                  "prompt": script.get("thumbnail_scene", script["topic_en"]) + ", simple bright sky in the top third",
                  "style": "vibrant detailed illustration, bold colors, epic dramatic lighting, clean linework"})
@@ -167,8 +202,8 @@ def picture(prompt, path, mock=False, key=None):
 
 
 MOVES = [  # slow, calm documentary camera moves (zoom expr, x expr, y expr)
-    ("min(1+0.0006*on,1.18)", "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"),            # slow push in
-    ("max(1.18-0.0006*on,1)", "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"),            # slow pull out
+    ("1+0.12*on/{f}", "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"),                   # push in
+    ("1.12-0.12*on/{f}", "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"),                # pull out
     ("1.15", "(iw-iw/zoom)*on/{f}", "ih/2-(ih/zoom/2)"),                         # pan right
     ("1.15", "(iw-iw/zoom)*(1-on/{f})", "ih/2-(ih/zoom/2)"),                     # pan left
     ("1.15", "iw/2-(iw/zoom/2)", "(ih-ih/zoom)*(1-on/{f})"),                     # tilt up
@@ -283,16 +318,20 @@ def build(script, work, mock=False):
     total = sum(durs)
     print(f"  narration: {len(scenes)} scenes, {total / 60:.1f} minutes")
 
+    shots = []                                   # (part, seconds): one picture each
+    for sc, d in zip(scenes, durs):
+        shots += split_time(scene_parts(sc), d)
+    print(f"  {len(shots)} pictures, about {total / max(len(shots), 1):.1f} s each")
     if not mock:
-        paint_all(scenes, script)
+        paint_all([p for p, _ in shots], script)
     clips = []
-    for k, (sc, d) in enumerate(zip(scenes, durs)):
-        img = picture(sc["visual"], work / f"img{k:03d}.jpg", mock, key=f"s{k:03d}")
+    for k, (p, d) in enumerate(shots):
+        img = picture(p["visual"], work / f"img{k:03d}.jpg", mock, key=f"s{k:03d}")
         c = work / f"c{k:03d}.mp4"
         scene_video(img, d, k, c)
         clips.append(c)
-        if k % 20 == 0:
-            print(f"  pictures + camera moves: {k + 1}/{len(scenes)}")
+        if k % 25 == 0:
+            print(f"  pictures + camera moves: {k + 1}/{len(shots)}")
 
     lst = work / "clips.txt"
     lst.write_text("".join(f"file '{c.resolve()}'\n" for c in clips))
